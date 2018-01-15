@@ -5,6 +5,7 @@ from __future__ import print_function
 import numpy as np
 import tensorflow as tf
 import os
+import math
 from matplotlib import pyplot as plt
 import matplotlib.gridspec as gridspec
 from tensorflow.examples.tutorials.mnist import input_data
@@ -17,7 +18,8 @@ n_classes = 10
 n_features = 784
 n_rows = 4
 n_cols = 4
-log_dir = "logs/train/"
+train_log_dir = "logs/train/"
+explorer_log_dir = "logs/explorer/"
 model_dir = "models/"
 out_dir = "out/tf_gan_graph"
 
@@ -320,9 +322,9 @@ def train():
 
     with tf.Session() as sess:
         sess.run(init)
-        tf.train.write_graph(sess.graph.as_graph_def(), log_dir,
+        tf.train.write_graph(sess.graph.as_graph_def(), train_log_dir,
                              "train_graph.pbtxt")
-        writer = tf.summary.FileWriter(log_dir, sess.graph)
+        writer = tf.summary.FileWriter(train_log_dir, sess.graph)
 
         for i in range(max_iteration):
             real_images, real_labels = mnist.train.next_batch(batch_size)
@@ -351,7 +353,8 @@ def train():
                     global_step=i)
                 d_saver.save(
                     sess,
-                    os.path.join(model_dir, "discriminator","discriminator.ckpt"),
+                    os.path.join(model_dir, "discriminator",
+                                 "discriminator.ckpt"),
                     global_step=i)
                 losses[i] = {"gen_loss": gg_loss, "disc_loss": dd_loss}
 
@@ -377,7 +380,8 @@ def train():
                 # fig = plot(real_images[:16])
                 fig = plot(g_samples, n_rows, n_cols)
                 plt.savefig(
-                    "{}/{}.png".format(log_dir, str(i)), bbox_inches='tight')
+                    "{}/{}.png".format(train_log_dir, str(i)),
+                    bbox_inches='tight')
                 plt.close(fig)
 
 
@@ -407,7 +411,8 @@ def train():
                                         "generator.ckpt-{}".format(best_it)))
         d_restorer.restore(
             sess,
-            os.path.join(model_dir, "discriminator","discriminator.ckpt-{}".format(best_it)))
+            os.path.join(model_dir, "discriminator",
+                         "discriminator.ckpt-{}".format(best_it)))
 
         best_e_loss = np.Inf
         best_it = 0
@@ -423,8 +428,12 @@ def train():
                 # save trained variables to disk
                 e_saver.save(
                     sess,
-                    os.path.join(model_dir, "encoder" ,"encoder.ckpt"),
+                    os.path.join(model_dir, "encoder", "encoder.ckpt"),
                     global_step=i)
+                # losses[i]['en_loss'] = ee_loss
+                if ee_loss < best_e_loss:
+                    best_e_loss = ee_loss
+                    best_it = i
 
             # if i and i % log_interval == 0:
             if i % log_interval == 0:
@@ -432,10 +441,6 @@ def train():
                 # writer.add_summary(summary, global_step=i)
                 print("Iteraion {} th, Encoder loss: {:.4f}".format(
                     i, ee_loss))
-                # losses[i]['en_loss'] = ee_loss
-                if ee_loss < best_e_loss:
-                    best_e_loss = ee_loss
-                    best_it = i
                 out_image = 16
                 recontructed_samples = sess.run(
                     g_e_x_probs,
@@ -446,48 +451,89 @@ def train():
                 # fig = plot(real_images[:16])
                 fig = plot(recontructed_samples, n_rows, n_cols)
                 plt.savefig(
-                    "{}/{}_recontructed.png".format(log_dir, str(i)),
+                    "{}/{}_recontructed.png".format(train_log_dir, str(i)),
                     bbox_inches='tight')
                 plt.close(fig)
 
                 fig = plot(real_images[:out_image], n_rows, n_cols)
                 plt.savefig(
-                    "{}/{}_original.png".format(log_dir, str(i)),
+                    "{}/{}_original.png".format(train_log_dir, str(i)),
                     bbox_inches='tight')
                 plt.close(fig)
     print("Iteration {} has the best encoder loss at {}".format(
         best_it, best_e_loss))
 
+from functools import partial
 
-def linear_interpolation_in_latent_space(z1, z2, n_steps, scope):
+
+def linear_interpolation_in_latent_space_batch_mode(z1,
+                                                    z2,
+                                                    n_steps,
+                                                    x_z_1=None,
+                                                    x_z_2=None):
+    inter_fn = partial(
+        linear_interpolation_in_latent_space,
+        n_steps=n_steps,
+    )
+    elems = (z1, z2, x_z_1, x_z_2)
+    return tf.map_fn(
+        fn=lambda elem: inter_fn(z1=elem[0], z2=elem[1], x_z_1=elem[2], x_z_2=elem[3]), 
+        elems=elems, dtype=(tf.float32)
+    )
+    # return tf.reshape(x_z_temps, shape=[batch_size, len(x_z_temps), -1], name="intermediate_values")
+
+
+def linear_interpolation_in_latent_space(z1,
+                                         z2,
+                                         n_steps,
+                                         x_z_1=None,
+                                         x_z_2=None):
+    # import inspect
+    # frame = inspect.currentframe()
+    # args, _, _, values = inspect.getargvalues(frame)
+    # print('function name "%s"' % inspect.getframeinfo(frame)[2])
+    # for i in args:
+    #     print("    %s = %s" % (i, values[i]))
+    # print(z1, z2, x_z_1, x_z_2, n_steps)
+    # return
     # do interpolation
     x_z_temps = []
     step_vec = tf.div(z2 - z1, n_steps)
-    first_visit = True
+    if x_z_1 is not None:
+        x_z_temps.append(x_z_1)
+    scope = tf.get_variable_scope()
     for i in range(n_steps):
-        z_temp = z1 + (i+1) * step_vec
+        # z_temp = z1 + (i + 1) * step_vec
+        z_temp = z1 + (i) * step_vec
         # print (z_temp)
         # rescontruct
-        if not first_visit:
-            scope.reuse_variables()
-        _, x_z_temp = generator(z_temp)
-        x_z_temps.append(x_z_temp)
+        # if not scope.reuse:
+        #     scope.reuse_variables()
+        _, x_z_temp = generator(tf.expand_dims(z_temp, axis=0))
+        x_z_temps.append(tf.squeeze(x_z_temp, axis=0))
         first_visit = False
-        
-    return tf.reshape(x_z_temps, shape=[])
+    if x_z_2 is not None:
+        x_z_temps.append(x_z_2)
+    return tf.reshape(x_z_temps, shape=[len(x_z_temps), -1])
+    # return tf.stack(x_z_rows)
+    # return tf.reshape(x_z_temps, shape=[batch_size, len(x_z_temps), -1], name="intermediate_values")
 
 
 def plot_rescontructed_images(reconstructed_images, n_rows):
     return plot(reconstructed_images, n_rows)
 
+
 def sample_pair_images(n_pairs=5):
     x1 = []
     x2 = []
     for i in range(n_pairs):
-        real_images, _ = mnist.train.next_batch(batch_size=2)        
+        real_images, real_labels = mnist.train.next_batch(batch_size=2)
         x1.append(real_images[0])
-        x2.append(real_images[1])    
+        x2.append(real_images[1])
+        # print (real_labels[0])
+        print(np.where(real_labels[0])[0], np.where(real_labels[1])[0])
     return (np.asarray(x1), np.asarray(x2))
+
 
 def explore_latent_space(gen_best_it, en_best_it):
     X = tf.placeholder(
@@ -505,13 +551,16 @@ def explore_latent_space(gen_best_it, en_best_it):
         z1 = encoder(x1)
         scope.reuse_variables()
         z2 = encoder(x2)
-    
-    explore_scope = "explore"
+
+    explore_scope = "explorer"
     gen_scope = "generator"
+    n_pairs = 5
+    n_steps = 20
     with tf.name_scope(explore_scope):
-        with tf.variable_scope(gen_scope) as scope:
-            x_z_betweens = linear_interpolation_in_latent_space(z1, z2, n_steps=10, scope=scope)
-            print (x_z_betweens)
+        with tf.variable_scope(gen_scope, reuse=tf.AUTO_REUSE) as scope:
+            x_z_intermediates = linear_interpolation_in_latent_space_batch_mode(
+                z1, z2, n_steps=n_steps, x_z_1=x1, x_z_2=x2)
+            print(x_z_intermediates)
 
     g_vars = tf.get_collection(
         tf.GraphKeys.TRAINABLE_VARIABLES, scope=gen_scope)
@@ -519,19 +568,38 @@ def explore_latent_space(gen_best_it, en_best_it):
         tf.GraphKeys.TRAINABLE_VARIABLES, scope=en_scope)
 
     init = tf.global_variables_initializer()
+    summary_ops = tf.summary.merge_all()
 
     g_restorer = tf.train.Saver(var_list=g_vars)
     e_restorer = tf.train.Saver(var_list=e_vars)
-    n_pairs = 5
     with tf.Session() as sess:
-        g_restorer.restore(sess,
-                           os.path.join(model_dir, "generator",
-                                        "generator.ckpt-{}".format(gen_best_it)))
+        writer = tf.summary.FileWriter(explorer_log_dir, sess.graph)
+
+        g_restorer.restore(
+            sess,
+            os.path.join(model_dir, "generator",
+                         "generator.ckpt-{}".format(gen_best_it)))
         e_restorer.restore(sess,
                            os.path.join(model_dir, "encoder",
                                         "encoder.ckpt-{}".format(en_best_it)))
         (x1_reals, x2_reals) = sample_pair_images(n_pairs)
-        print (x1_reals.shape)
+        print(x1_reals.shape, x2_reals.shape)
+        x_z_intermediates_reals = sess.run(
+            x_z_intermediates, feed_dict={
+                x1: x1_reals,
+                x2: x2_reals
+            })
+        print("intermediates values: {}".format(x_z_intermediates_reals.shape))
+        full_dims = x_z_intermediates_reals.shape
+        n_rows = full_dims[0]
+        n_cols = full_dims[1]
+        flatten_samples = np.reshape(x_z_intermediates_reals,
+                                     [n_rows * n_cols, -1])
+        # flatten_samples = np.reshape(x_z_intermediates_reals, [n_rows * n_cols, -1], order="F")
+        print(flatten_samples.shape)
+        fig = plot(flatten_samples, n_rows, n_cols)
+        # fig = plot(flatten_samples, n_cols, n_rows)
+        plt.show()
 
 
 def gan_model_fn():
@@ -557,12 +625,9 @@ def train_estimator():
 
 
 def main():
-    train()
-    return
-    explore_latent_space(
-        gen_best_it=80000,
-        en_best_it=80000
-    )
+    # train()
+    # return
+    explore_latent_space(gen_best_it=70000, en_best_it=80000)
 
 
 if __name__ == "__main__":
