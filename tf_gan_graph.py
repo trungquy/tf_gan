@@ -17,6 +17,18 @@ n_classes = 10
 n_features = 784
 n_rows = 4
 n_cols = 4
+log_dir = "logs/train/"
+model_dir = "models/"
+out_dir = "out/tf_gan_graph"
+
+batch_size = 128
+max_iteration = 100000
+log_interval = 1000
+save_interval = 10000
+k = 2
+j = 1
+
+mnist = input_data.read_data_sets('../../MNIST_data', one_hot=True)
 
 
 def discriminator(x, is_conditional=False, y=None):
@@ -211,7 +223,8 @@ def sample_one_hot_labels(batch_size, n_classes, random=True):
     return temp
 
 
-def plot(samples):
+def plot(samples, n_rows, n_cols):
+    assert len(samples) == n_cols * n_rows
     fig = plt.figure(figsize=(n_cols, n_rows))
     gs = gridspec.GridSpec(n_rows, n_cols)
     gs.update(wspace=0.05, hspace=0.05)
@@ -239,9 +252,9 @@ def train():
         - Sample m real sample X = {x1, .., xm}
         - Generate m fake samples G_z
         - Input generated fakes samples (G_z) to Discriminator 
-        => get probability of real/fake D_G_z
+        => get probability of real/fake D_G_z (expect to all 0.0)
         - Input real samples (X) to Discriminator
-        => get probability of real/fake D_X (expect to all 1)
+        => get probability of real/fake D_X (expect to all 1.0)
     Inputs:
         G: Generator model
         D: Discriminator model
@@ -254,7 +267,7 @@ def train():
     Z = tf.placeholder(
         tf.float32, shape=[None, latent_dim], name="laten_variables")
     Y = tf.placeholder(tf.float32, shape=[None, n_classes], name="real_labels")
-    is_conditional = True
+    is_conditional = False
 
     # train encoder
     en_scope = "encoder"
@@ -285,41 +298,26 @@ def train():
     d_loss = discriminator_loss_with_logits(d_g_z_logits, d_x_logits)
     e_loss = encoder_loss(g_e_x_probs, X)
 
-    g_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=gen_scope)
-    d_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=disc_scope)
-    e_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=en_scope)
+    g_vars = tf.get_collection(
+        tf.GraphKeys.TRAINABLE_VARIABLES, scope=gen_scope)
+    d_vars = tf.get_collection(
+        tf.GraphKeys.TRAINABLE_VARIABLES, scope=disc_scope)
+    e_vars = tf.get_collection(
+        tf.GraphKeys.TRAINABLE_VARIABLES, scope=en_scope)
 
     with tf.name_scope("Generator_Optimizer"):
-        g_solver = tf.train.AdamOptimizer().minimize(
-            g_loss,
-            var_list=g_vars)
+        g_solver = tf.train.AdamOptimizer().minimize(g_loss, var_list=g_vars)
     with tf.name_scope("Discriminator_Optimizer"):
-        d_solver = tf.train.AdamOptimizer().minimize(
-            d_loss,
-            var_list=d_vars)
-
+        d_solver = tf.train.AdamOptimizer().minimize(d_loss, var_list=d_vars)
     with tf.name_scope("Encoder_Optimizer"):
-        e_solver = tf.train.AdamOptimizer().minimize(
-            e_loss,
-            var_list=e_vars)
+        e_solver = tf.train.AdamOptimizer().minimize(e_loss, var_list=e_vars)
 
     init = tf.global_variables_initializer()
-    log_dir = "logs/train/"
-    model_dir = "models/"
-    out_dir = "out/tf_gan_graph"
-
-    batch_size = 128
-    mnist = input_data.read_data_sets('../../MNIST_data', one_hot=True)
     summary_ops = tf.summary.merge_all()
-
-    max_iteration = 100000
-    log_interval = 1000
-    save_interval = 10000
-    k = 2
-    j = 1
     losses = {}
-    d_saver = tf.train.Saver(var_list=d_vars)
-    g_saver = tf.train.Saver(var_list=g_vars)
+    d_saver = tf.train.Saver(var_list=d_vars, max_to_keep=10)
+    g_saver = tf.train.Saver(var_list=g_vars, max_to_keep=10)
+
     with tf.Session() as sess:
         sess.run(init)
         tf.train.write_graph(sess.graph.as_graph_def(), log_dir,
@@ -347,9 +345,14 @@ def train():
                     })
             if i and i % save_interval == 0:
                 # save trained variables to disk
-                check_point_prefix = os.path.join(
-                    model_dir, "generator_discriminator.ckpt")
-                saver.save(sess, model_dir, global_step=i)
+                g_saver.save(
+                    sess,
+                    os.path.join(model_dir, "generator", "generator.ckpt"),
+                    global_step=i)
+                d_saver.save(
+                    sess,
+                    os.path.join(model_dir, "discriminator","discriminator.ckpt"),
+                    global_step=i)
                 losses[i] = {"gen_loss": gg_loss, "disc_loss": dd_loss}
 
             # if i and i % log_interval == 0:
@@ -372,13 +375,15 @@ def train():
                         Y: sample_one_hot_labels(out_image, n_classes, random)
                     })
                 # fig = plot(real_images[:16])
-                fig = plot(g_samples)
+                fig = plot(g_samples, n_rows, n_cols)
                 plt.savefig(
                     "{}/{}.png".format(log_dir, str(i)), bbox_inches='tight')
                 plt.close(fig)
 
-    # to train encoder
-    # looking for iteration which have best discrimination loss
+
+# def train_encoder(best_it):
+# to train encoder
+# looking for iteration which have best discrimination loss
     best_it = 0
     best_margin = 1
     for i, loss in losses.iteritems():
@@ -388,12 +393,145 @@ def train():
             best_it = i
     print("Iteration {} has the best margin at {} (disc loss: {})".format(
         best_it, best_margin, losses[best_it]['disc_loss']))
-    restorer = tf.train.Saver(
-        var_list= g_vars + d_vars
-    )
+
+    # best_it = 80000
+
+    g_restorer = tf.train.Saver(var_list=g_vars)
+    d_restorer = tf.train.Saver(var_list=d_vars)
+    e_saver = tf.train.Saver(var_list=e_vars, max_to_keep=10)
+
     with tf.Session() as sess:
         sess.run(init)
-        restorer.restore(sess, )
+        g_restorer.restore(sess,
+                           os.path.join(model_dir, "generator",
+                                        "generator.ckpt-{}".format(best_it)))
+        d_restorer.restore(
+            sess,
+            os.path.join(model_dir, "discriminator","discriminator.ckpt-{}".format(best_it)))
+
+        best_e_loss = np.Inf
+        best_it = 0
+        for i in range(max_iteration):
+            real_images, real_labels = mnist.train.next_batch(batch_size)
+            # print (real_images.shape)
+            ee_loss, _ = sess.run(
+                [e_loss, e_solver], feed_dict={
+                    X: real_images,
+                    Y: real_labels
+                })
+            if i and i % save_interval == 0:
+                # save trained variables to disk
+                e_saver.save(
+                    sess,
+                    os.path.join(model_dir, "encoder" ,"encoder.ckpt"),
+                    global_step=i)
+
+            # if i and i % log_interval == 0:
+            if i % log_interval == 0:
+                # summary = sess.run(summary_ops)
+                # writer.add_summary(summary, global_step=i)
+                print("Iteraion {} th, Encoder loss: {:.4f}".format(
+                    i, ee_loss))
+                # losses[i]['en_loss'] = ee_loss
+                if ee_loss < best_e_loss:
+                    best_e_loss = ee_loss
+                    best_it = i
+                out_image = 16
+                recontructed_samples = sess.run(
+                    g_e_x_probs,
+                    feed_dict={
+                        X: real_images[:out_image],
+                        Y: real_labels[:out_image]
+                    })
+                # fig = plot(real_images[:16])
+                fig = plot(recontructed_samples, n_rows, n_cols)
+                plt.savefig(
+                    "{}/{}_recontructed.png".format(log_dir, str(i)),
+                    bbox_inches='tight')
+                plt.close(fig)
+
+                fig = plot(real_images[:out_image], n_rows, n_cols)
+                plt.savefig(
+                    "{}/{}_original.png".format(log_dir, str(i)),
+                    bbox_inches='tight')
+                plt.close(fig)
+    print("Iteration {} has the best encoder loss at {}".format(
+        best_it, best_e_loss))
+
+
+def linear_interpolation_in_latent_space(z1, z2, n_steps, scope):
+    # do interpolation
+    x_z_temps = []
+    step_vec = tf.div(z2 - z1, n_steps)
+    first_visit = True
+    for i in range(n_steps):
+        z_temp = z1 + (i+1) * step_vec
+        # print (z_temp)
+        # rescontruct
+        if not first_visit:
+            scope.reuse_variables()
+        _, x_z_temp = generator(z_temp)
+        x_z_temps.append(x_z_temp)
+        first_visit = False
+        
+    return tf.reshape(x_z_temps, shape=[])
+
+
+def plot_rescontructed_images(reconstructed_images, n_rows):
+    return plot(reconstructed_images, n_rows)
+
+def sample_pair_images(n_pairs=5):
+    x1 = []
+    x2 = []
+    for i in range(n_pairs):
+        real_images, _ = mnist.train.next_batch(batch_size=2)        
+        x1.append(real_images[0])
+        x2.append(real_images[1])    
+    return (np.asarray(x1), np.asarray(x2))
+
+def explore_latent_space(gen_best_it, en_best_it):
+    X = tf.placeholder(
+        tf.float32, shape=[None, n_features], name="real_images")
+    Z = tf.placeholder(
+        tf.float32, shape=[None, latent_dim], name="laten_variables")
+    Y = tf.placeholder(tf.float32, shape=[None, n_classes], name="real_labels")
+    x1 = tf.placeholder(tf.float32, shape=[None, n_features], name="x1")
+    x2 = tf.placeholder(tf.float32, shape=[None, n_features], name="x2")
+    is_conditional = True
+
+    # train encoder
+    en_scope = "encoder"
+    with tf.variable_scope(en_scope) as scope:
+        z1 = encoder(x1)
+        scope.reuse_variables()
+        z2 = encoder(x2)
+    
+    explore_scope = "explore"
+    gen_scope = "generator"
+    with tf.name_scope(explore_scope):
+        with tf.variable_scope(gen_scope) as scope:
+            x_z_betweens = linear_interpolation_in_latent_space(z1, z2, n_steps=10, scope=scope)
+            print (x_z_betweens)
+
+    g_vars = tf.get_collection(
+        tf.GraphKeys.TRAINABLE_VARIABLES, scope=gen_scope)
+    e_vars = tf.get_collection(
+        tf.GraphKeys.TRAINABLE_VARIABLES, scope=en_scope)
+
+    init = tf.global_variables_initializer()
+
+    g_restorer = tf.train.Saver(var_list=g_vars)
+    e_restorer = tf.train.Saver(var_list=e_vars)
+    n_pairs = 5
+    with tf.Session() as sess:
+        g_restorer.restore(sess,
+                           os.path.join(model_dir, "generator",
+                                        "generator.ckpt-{}".format(gen_best_it)))
+        e_restorer.restore(sess,
+                           os.path.join(model_dir, "encoder",
+                                        "encoder.ckpt-{}".format(en_best_it)))
+        (x1_reals, x2_reals) = sample_pair_images(n_pairs)
+        print (x1_reals.shape)
 
 
 def gan_model_fn():
@@ -420,6 +558,11 @@ def train_estimator():
 
 def main():
     train()
+    return
+    explore_latent_space(
+        gen_best_it=80000,
+        en_best_it=80000
+    )
 
 
 if __name__ == "__main__":
