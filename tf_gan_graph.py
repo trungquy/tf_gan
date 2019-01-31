@@ -38,7 +38,7 @@ def discriminator(x, is_conditional=False, y=None):
   """
     Input:
         - X: real/fake images from real distribution / from generator - shape = [-1, 784]
-        - y: condinal label
+        - y: use label if is_conditional==True
     Return:
         - probability of X is real/fake (1.0: real, 0.0: fake) - shape = [-1, 1]
     """
