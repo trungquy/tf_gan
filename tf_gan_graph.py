@@ -177,9 +177,9 @@ def discriminator_loss_with_logits(D_G_logits,
                                    scope="discriminator_with_logits",
                                    one_side_smooth_ratio=1.0):
   """
-    Input:
-        - y: condinal label
-    """
+  Input:
+      - y: label
+  """
   with tf.name_scope(scope):
     # fake losss
     fake_loss = tf.reduce_mean(
@@ -213,9 +213,11 @@ def sample_one_hot_labels(batch_size, n_classes, random=True):
   return temp
 
 
-def plot(samples, n_rows, n_cols):
+def plot(samples, n_rows, n_cols, niter=None):
   assert len(samples) == n_cols * n_rows
   fig = plt.figure(figsize=(n_cols, n_rows))
+  if niter is not None:
+    plt.suptitle("Iteration {}".format(niter))
   gs = gridspec.GridSpec(n_rows, n_cols)
   gs.update(wspace=0.05, hspace=0.05)
 
@@ -251,7 +253,7 @@ def train(is_conditional=False):
         X: batch of real samples
         Z: batch of generated fake sample
     Returns:
-    """
+  """
   X = tf.placeholder(tf.float32, shape=[None, n_features], name="real_images")
   Z = tf.placeholder(
       tf.float32, shape=[None, latent_dim], name="laten_variables")
@@ -362,7 +364,7 @@ def train(is_conditional=False):
                 Z: sample(out_image, latent_dim),
                 Y: sample_one_hot_labels(out_image, n_classes, random)
             })        
-        fig = plot(g_samples, n_rows, n_cols)
+        fig = plot(g_samples, n_rows, n_cols, niter=i)
         plt.savefig(
             "{}/{}.png".format(train_log_dir, str(i)), bbox_inches='tight')
         plt.close(fig)
@@ -434,13 +436,13 @@ def train(is_conditional=False):
                 Y: real_labels[:out_image]
             })
         # fig = plot(real_images[:16])
-        fig = plot(recontructed_samples, n_rows, n_cols)
+        fig = plot(recontructed_samples, n_rows, n_cols, niter=i)
         plt.savefig(
             "{}/{}_recontructed.png".format(train_log_dir, str(i)),
             bbox_inches='tight')
         plt.close(fig)
 
-        fig = plot(real_images[:out_image], n_rows, n_cols)
+        fig = plot(real_images[:out_image], n_rows, n_cols, niter=i)
         plt.savefig(
             "{}/{}_original.png".format(train_log_dir, str(i)),
             bbox_inches='tight')
@@ -569,15 +571,26 @@ def explore_latent_space(gen_best_it, en_best_it):
     n_cols = full_dims[1]
     flatten_samples = np.reshape(x_z_intermediates_reals, [n_rows * n_cols, -1])
     plot(flatten_samples, n_rows, n_cols)
+    plt.savefig(
+            "{}/interpolate.png".format(explorer_log_dir),
+            bbox_inches='tight')
 
     plt.show()
 
 
 def main():
-  # is_conditional = True
-  is_conditional = False
-  best_gen_it, best_en_it = train(is_conditional)
-  # best_gen_it, best_en_it = (70000, 60000)
+  is_conditional = True
+  # is_conditional = False
+  best_gen_it, best_en_it = train(is_conditional)  
+  # best_gen_it, best_en_it = (50000, 90000)
+
+  best_it_file = "best_it.pkl"
+  import pickle
+  import os
+  with open(best_it_file, "wb+") as f:
+    pickle.dump((best_gen_it, best_en_it), f)  
+  if os.path.isfile(best_it_file):
+      (best_gen_it, best_en_it) = pickle.load(open(best_it_file, "rb"))
   if not is_conditional:
     explore_latent_space(
         gen_best_it=best_gen_it,
