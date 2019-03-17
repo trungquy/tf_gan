@@ -1,5 +1,5 @@
 # Generative Adversarial Network
-
+Two hidden layer GAN implementation using Tensorflow graph execution
 - Discriminative Loss:
 
 | Without label | With label |
